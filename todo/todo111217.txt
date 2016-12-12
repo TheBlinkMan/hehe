@@ -1,0 +1,1 @@
+Make a call to only accept and parce connections and other to do both, make data structures to each clients and fds
