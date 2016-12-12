@@ -9,7 +9,7 @@
 #include <poll.h>
 #include <errno.h>
 #include <string.h>
-
+#include <sys/time.h>
 #define HOSTADDR "127.0.0.1"
 //#define HOSTADDR "192.168.25.12"
 #define MAXQUEUESIZE 100
@@ -37,8 +37,9 @@ int main(int argc, char *argv[])
   int i;
   int current_size;
   int stop_send = 0;
-
-
+  int send_quota = 0;
+  struct timeval last, current, difference;
+  struct timeval one = {.tv_sec = 1, .tv_usec = 1};
   if (argc < 3 || argc > 4)
   {
     usage();
@@ -52,12 +53,20 @@ int main(int argc, char *argv[])
   timeout = -1;
   new_size = 1;
   memset(buffer, 0, sizeof(buffer));
+  gettimeofday(&last, NULL);
   while(1)
   {
     current_size = new_size;
     nfds = new_size;
-    poll(fds, 0, 3 * 60 * 1000);
-    //status = poll(fds, nfds, timeout);
+//    poll(fds, 0, 3 * 60 * 1000);
+    if (stop_send)
+    {
+      printf("STOP SEND POLL\n");
+      status = poll(fds, 1, 250);
+    }
+    else
+      status = poll(fds, nfds, -1);
+
     if (status == -1)
     {
       perror("poll() failed");
@@ -65,19 +74,19 @@ int main(int argc, char *argv[])
       close(listen_sfd);
       exit(-1);
     }
-    if (status == 0)
+    if (status == 0 && !stop_send)
     {
       fprintf(stderr, "poll timedout\n");
       close(listen_sfd);
       exit(0);
     }
 
-
     for (i = 0; i < current_size; ++i)
     {
       if (fds[i].revents == 0)
+      {
 	continue;
-
+      }
       if (!(fds[i].revents != POLLIN) && !(fds[i].revents != POLLOUT))
       {
 	printf("Error! revents = %d\n", fds[i].revents);
@@ -96,6 +105,7 @@ int main(int argc, char *argv[])
 	    }
 	    if (new_sfd == -1)
 	    {
+	      printf("%d\n", new_sfd);
 	    }
 	    else
 	    {
@@ -115,16 +125,54 @@ int main(int argc, char *argv[])
 	  send(fds[i].fd, HTTPOK, strlen(HTTPOK), MSG_DONTWAIT);
 	}
       }
-      else if (fds[i].revents == POLLOUT)
+      else if (fds[i].revents == POLLOUT && !stop_send)
       {
 	int rc;
-
-	rc = fread(buffer, 1, BUFSIZ, fd);
+	rc = read(fileno(fd), buffer, sizeof(buffer));
 	if (rc == 0)
 	{
 	}
 	send(fds[i].fd, buffer, rc, MSG_DONTWAIT);
+	send_quota += rc;
       }
+      if (nfds > 1)
+      {
+	gettimeofday(&current,NULL);
+	timersub(&current, &last, &difference);
+	if (timercmp(&difference, &one, <))
+	{
+	  printf("%ld\n", difference.tv_usec);
+	  if (send_quota >= 300000)
+	  {
+	    last = current;
+	    send_quota = 0;
+	    stop_send = 1;
+	  }
+	}
+	else
+	{
+	  last = current;
+	  if (stop_send == 1)
+	  {
+	    stop_send = 0;
+	  }
+	}
+      }
+      /*
+      else
+      {
+	if (stop_send == 0)
+	{
+	  last = current;
+	  stop_send = 1;
+	}
+	else if (stop_send == 1)
+	{
+	  last = current;
+	  stop_send = 0;
+	}
+      }
+      */
     }
   }
   //printf("A peer connected to the server\n");
